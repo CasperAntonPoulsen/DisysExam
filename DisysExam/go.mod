@@ -1,4 +1,4 @@
-module github.com/CasperAntonPoulsen/DisysExam
+module DisysExam
 
 go 1.17
 

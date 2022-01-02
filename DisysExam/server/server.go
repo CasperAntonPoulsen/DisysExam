@@ -9,7 +9,8 @@ import (
 	"strconv"
 	"time"
 
-	pb "github.com/CasperAntonPoulsen/DisysExam/proto"
+	pb "DisysExam/proto"
+
 	"google.golang.org/grpc"
 )
 
@@ -191,7 +192,7 @@ func main() {
 		portInt := 8080 + i
 		port := ":" + strconv.Itoa(portInt)
 
-		conn, err := grpc.Dial("incrementserver"+strconv.Itoa(i+1)+port, grpc.WithInsecure())
+		conn, err := grpc.Dial("server"+strconv.Itoa(i+1)+port, grpc.WithInsecure())
 		if err != nil {
 			log.Printf("could not connect to rm %v: %v", i+1, err)
 		}

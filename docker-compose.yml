@@ -1,6 +1,6 @@
 version: '3'
 services:
-  incrementserver1:
+  server1:
     build:  
       context: ./DisysExam
       dockerfile: Dockerfile
@@ -14,7 +14,7 @@ services:
       - ID=1
     ports:
       - 8080:8080
-  incrementserver2:
+  server2:
     build:  
       context: ./DisysExam
       dockerfile: Dockerfile
@@ -28,7 +28,7 @@ services:
       - ID=2
     ports:
       - 8081:8081
-  incrementserver3:
+  server3:
     build:  
       context: ./DisysExam
       dockerfile: Dockerfile

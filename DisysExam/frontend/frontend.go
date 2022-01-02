@@ -9,7 +9,8 @@ import (
 	"os"
 	"strconv"
 
-	pb "github.com/CasperAntonPoulsen/DisysExam/proto"
+	pb "DisysExam/proto"
+
 	"github.com/gin-gonic/gin"
 	"google.golang.org/grpc"
 )
@@ -28,7 +29,7 @@ type Server struct {
 
 func (s *Server) FEIncrement(c *gin.Context) {
 
-	log.Print("Getting current bid")
+	log.Print("Incrementing")
 	rqst := &pb.Request{User: &pb.User{Userid: 0}}
 
 	stream, err := s.leader.connection.RequestToken(context.Background(), rqst)
@@ -111,7 +112,7 @@ func main() {
 		portInt := 8080 + i
 		port := ":" + strconv.Itoa(portInt)
 
-		conn, err := grpc.Dial("incrementserver"+strconv.Itoa(i+1)+port, grpc.WithInsecure())
+		conn, err := grpc.Dial("server"+strconv.Itoa(i+1)+port, grpc.WithInsecure())
 		if err != nil {
 			log.Printf("could not connect to rm %v: %v", i+1, err)
 		}
@@ -129,7 +130,7 @@ func main() {
 	pb.RegisterExamServer(grpcServer, &server)
 	r := gin.Default()
 
-	r.GET("/Increment", server.FEIncrement)
+	r.POST("/Increment", server.FEIncrement)
 
 	go func() { grpcServer.Serve(listener) }()
 	log.Print("API listening at :8000")
