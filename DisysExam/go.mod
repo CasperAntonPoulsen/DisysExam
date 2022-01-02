@@ -1,4 +1,4 @@
-module github.com/CasperAntonPoulsen/disysminiproject3
+module github.com/CasperAntonPoulsen/DisysExam
 
 go 1.17
 

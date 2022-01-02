@@ -9,7 +9,7 @@ import (
 	"os"
 	"strconv"
 
-	pb "github.com/CasperAntonPoulsen/disysminiproject3/proto"
+	pb "github.com/CasperAntonPoulsen/DisysExam/proto"
 	"github.com/gin-gonic/gin"
 	"google.golang.org/grpc"
 )
@@ -17,80 +17,16 @@ import (
 type Replica struct {
 	user       *pb.User
 	port       string
-	connection pb.AuctionClient
+	connection pb.ExamClient
 }
 
 type Server struct {
-	pb.UnimplementedAuctionServer
+	pb.UnimplementedExamServer
 	leader   Replica
 	Replicas []Replica
 }
 
-func (s *Server) FEMakeBid(c *gin.Context) {
-
-	userid, err := strconv.Atoi(c.PostForm("userid"))
-	if err != nil {
-		// Throw and internal server error message and send the exception in the ack
-		c.JSON(500, gin.H{
-			"ack": fmt.Sprintln(err),
-		})
-		return
-	}
-
-	amount, err := strconv.Atoi(c.PostForm("amount"))
-	if err != nil {
-		// Throw and internal server error message and send the exception in the ack
-		c.JSON(500, gin.H{
-			"ack": fmt.Sprintln(err),
-		})
-		return
-	}
-
-	log.Printf("Processing bid from: %v, of amount: %v", userid, amount)
-
-	rqst := &pb.Request{User: &pb.User{Userid: int32(userid)}}
-	bid := &pb.Bid{Userid: int32(userid), Amount: int32(amount)}
-
-	stream, err := s.leader.connection.RequestToken(context.Background(), rqst)
-	if err != nil {
-		// Throw and internal server error message and send the exception in the ack
-		c.JSON(500, gin.H{
-			"ack": fmt.Sprintln(err),
-		})
-		return
-	}
-	//recieve grant token
-
-	for {
-		_, err := stream.Recv()
-		if err != nil {
-			log.Printf("error recieving grant token: %v", err)
-			break
-		} else {
-			log.Print("Grant token recieved, accessing critical section")
-			// make the bid
-
-			ack, err := s.leader.connection.MakeBid(context.Background(), bid)
-			if err != nil {
-				// Throw and internal server error message and send the exception in the ack
-				c.JSON(500, gin.H{
-					"ack": fmt.Sprintln(err),
-				})
-			}
-			c.JSON(200, gin.H{
-				"ack": ack.Status,
-			})
-			log.Print("Succesfully processed bid")
-			log.Print("Finished, sending release token")
-			// then release
-			s.leader.connection.ReleaseToken(context.Background(), &pb.Release{User: rqst.User})
-			break
-		}
-	}
-
-}
-
-func (s *Server) FERequestResult(c *gin.Context) {
+func (s *Server) FEIncrement(c *gin.Context) {
 
 	log.Print("Getting current bid")
 	rqst := &pb.Request{User: &pb.User{Userid: 0}}
@@ -115,7 +51,7 @@ func (s *Server) FERequestResult(c *gin.Context) {
 			log.Print("Grant token recieved, accessing critical section")
 			// access critical section
 
-			result, err := s.leader.connection.RequestResult(context.Background(), &pb.Empty{})
+			result, err := s.leader.connection.Increment(context.Background(), &pb.Empty{})
 			if err != nil {
 				// Throw and internal server error message and send the exception in the ack
 				c.JSON(500, gin.H{
@@ -175,12 +111,12 @@ func main() {
 		portInt := 8080 + i
 		port := ":" + strconv.Itoa(portInt)
 
-		conn, err := grpc.Dial("auctionserver"+strconv.Itoa(i+1)+port, grpc.WithInsecure())
+		conn, err := grpc.Dial("incrementserver"+strconv.Itoa(i+1)+port, grpc.WithInsecure())
 		if err != nil {
 			log.Printf("could not connect to rm %v: %v", i+1, err)
 		}
 		log.Printf("Connected to Replica: %v", i+1)
-		rmClient := pb.NewAuctionClient(conn)
+		rmClient := pb.NewExamClient(conn)
 
 		Replicas = append(Replicas, Replica{&pb.User{Userid: int32(i + 1)}, port, rmClient})
 	}
@@ -190,11 +126,10 @@ func main() {
 		Replicas: Replicas,
 	}
 
-	pb.RegisterAuctionServer(grpcServer, &server)
+	pb.RegisterExamServer(grpcServer, &server)
 	r := gin.Default()
 
-	r.GET("/result", server.FERequestResult)
-	r.POST("/bid", server.FEMakeBid)
+	r.GET("/Increment", server.FEIncrement)
 
 	go func() { grpcServer.Serve(listener) }()
 	log.Print("API listening at :8000")

@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"time"
 
-	pb "github.com/CasperAntonPoulsen/disysminiproject3/proto"
+	pb "github.com/CasperAntonPoulsen/DisysExam/proto"
 	"google.golang.org/grpc"
 )
 
@@ -17,22 +17,17 @@ var port = flag.String("port", "8080", "The docker port of the server")
 
 type Request struct {
 	user   *pb.User
-	stream pb.Auction_RequestTokenServer
-}
-
-type Auction struct {
-	amount   int32
-	bidderID int32
+	stream pb.Exam_RequestTokenServer
 }
 
 type Replica struct {
 	user       *pb.User
 	port       string
-	connection pb.AuctionClient
+	connection pb.ExamClient
 }
 
 type Server struct {
-	pb.UnimplementedAuctionServer
+	pb.UnimplementedExamServer
 	RequestQueue chan Request
 	Release      chan *pb.Release
 	Leader       Replica
@@ -40,58 +35,53 @@ type Server struct {
 	id           int32
 	error        chan error
 	lamport      int32
-	auction      Auction
+	incval       *pb.Incval //pointer to the increment value
 	timeout      int32
-	frontend     pb.AuctionClient
+	frontend     pb.ExamClient
 }
 
-func (s *Server) RequestToken(rqst *pb.Request, stream pb.Auction_RequestTokenServer) error {
+func (s *Server) RequestToken(rqst *pb.Request, stream pb.Exam_RequestTokenServer) error {
 
 	request := Request{user: rqst.User, stream: stream}
 
-	go func() { s.RequestQueue <- request }()
+	go func() { s.RequestQueue <- request }() //adds a requesttoken to the queue, if a client calls this function
 
 	log.Printf("Request token added to queue from: %v", rqst.User.Userid)
 	return <-s.error
 }
 
+func GrantToken(rqst Request) error {
+	log.Printf("Granting token to: %v", rqst.user.Userid)
+	err := rqst.stream.Send(&pb.Grant{User: rqst.user})
+	return err
+}
+
 func (s *Server) ReleaseToken(ctx context.Context, release *pb.Release) (*pb.Empty, error) {
 	log.Printf("Recieved release token from: %v", release.User.Userid)
 
-	go func() { s.Release <- &pb.Release{User: release.User} }()
+	go func() { s.Release <- &pb.Release{User: release.User} }() //adds a releasetoken to the queue, if a client calls this function, after the client has accessed the critical section
 
 	return &pb.Empty{}, nil
 }
 
-func (s *Server) RequestResult(ctx context.Context, empty *pb.Empty) (*pb.Result, error) {
+func (s *Server) Increment(ctx context.Context, empty *pb.Empty) (*pb.Incval, error) {
 
-	log.Print("Reading the result")
-	return &pb.Result{Amount: s.auction.amount}, nil
-}
-
-func (s *Server) MakeBid(ctx context.Context, bid *pb.Bid) (*pb.Acknowledgement, error) {
-
-	if bid.Amount <= s.auction.amount {
-		return &pb.Acknowledgement{Status: "fail"}, nil
-	}
-	log.Print("Proccessing bid")
+	log.Print("Proccessing incerment")
 	if s.id == s.Leader.user.Userid {
-		s.broadcastBid(bid)
+		s.broadcastIncremant()
 	}
 
-	s.auction.amount = bid.Amount
-	s.auction.bidderID = bid.Userid
-
+	s.incval.Amount++
 	s.lamport++
-	log.Print("Bid complete")
-	return &pb.Acknowledgement{Status: "success"}, nil
+	log.Print("incerment complete")
+	return s.incval, nil
 }
 
 //write to other replicationmanagers (Servers)
-func (s *Server) broadcastBid(bid *pb.Bid) {
+func (s *Server) broadcastIncremant() {
 	for _, rm := range s.Replicas {
 
-		_, err := rm.connection.MakeBid(context.Background(), bid)
+		_, err := rm.connection.Increment(context.Background(), &pb.Empty{})
 		if err != nil {
 			log.Printf("could not connect to rm %v: %v", rm.user.Userid+1, err)
 		}
@@ -99,14 +89,8 @@ func (s *Server) broadcastBid(bid *pb.Bid) {
 	}
 }
 
-func (s *Server) Ping(ctx context.Context, empty *pb.Empty) (*pb.Empty, error) {
+func (s *Server) Ping(ctx context.Context, empty *pb.Empty) (*pb.Empty, error) { //"heartbeat"-call
 	return empty, nil
-}
-
-func GrantToken(rqst Request) error {
-	log.Printf("Granting token to: %v", rqst.user.Userid)
-	err := rqst.stream.Send(&pb.Grant{User: rqst.user})
-	return err
 }
 
 //helper function to convert string to int32
@@ -132,10 +116,10 @@ func (s *Server) CompareLamports() {
 		if err != nil {
 			log.Printf("Replica %v did not respond within the given time %v", rm.user.Userid, err)
 		} else {
-			if usr.Time > s.lamport {
-				log.Printf("Replica %v has newer version of the auction", rm.user.Userid)
+			if usr.Time > s.lamport { //check if self, has lower lamport
+				log.Printf("Replica %v has higher lamport-timestamp", rm.user.Userid)
 				return
-			} else if usr.Userid > s.id {
+			} else if usr.Userid > s.id { //check if self, has lower id
 				log.Printf("Replica %v has higher id", rm.user.Userid)
 				return
 			}
@@ -143,22 +127,23 @@ func (s *Server) CompareLamports() {
 
 	}
 
-	leaderState := &pb.State{User: &pb.User{Userid: s.id, Time: s.lamport}, Amount: s.auction.amount, Bidid: s.auction.bidderID}
+	leaderState := &pb.State{User: &pb.User{Userid: s.id, Time: s.lamport}, Amount: s.incval.Amount}
 	for _, rm := range s.Replicas {
-		_, err := rm.connection.Coordinator(context.Background(), leaderState)
+		_, err := rm.connection.Coordinator(context.Background(), leaderState) //send self as leader to others
 		if err != nil {
 			log.Printf("Replica %v did not respond within the given time %v", rm.user.Userid, err)
 		}
 	}
 	s.Leader = Replica{user: leaderState.User}
 	log.Printf("Electing myself as leader")
-	// tell frontend you're the new leader
+	// tell client you're the new leader
 	_, err := s.frontend.Coordinator(context.Background(), leaderState)
 	if err != nil {
 		log.Printf("Could not contanct frontend: %v", err)
 	}
 }
 
+// set incomming leader, as leader for this server
 func (s *Server) Coordinator(ctx context.Context, leaderState *pb.State) (*pb.Empty, error) {
 	s.Leader.user = leaderState.User
 	for _, rm := range s.Replicas {
@@ -167,7 +152,7 @@ func (s *Server) Coordinator(ctx context.Context, leaderState *pb.State) (*pb.Em
 			s.Leader.connection = rm.connection
 		}
 	}
-	s.auction = Auction{bidderID: leaderState.Bidid, amount: leaderState.Amount}
+	s.incval = &pb.Incval{Amount: leaderState.Amount}
 	log.Printf("Recieved new leader: %v", s.Leader.user.Userid)
 	return &pb.Empty{}, nil
 }
@@ -199,19 +184,19 @@ func main() {
 
 	for i := 0; i < int(NumReplicas); i++ {
 
-		// does not include itself
+		// do not include itself
 		if int32(i+1) == id {
 			continue
 		}
 		portInt := 8080 + i
 		port := ":" + strconv.Itoa(portInt)
 
-		conn, err := grpc.Dial("auctionserver"+strconv.Itoa(i+1)+port, grpc.WithInsecure())
+		conn, err := grpc.Dial("incrementserver"+strconv.Itoa(i+1)+port, grpc.WithInsecure())
 		if err != nil {
 			log.Printf("could not connect to rm %v: %v", i+1, err)
 		}
 		log.Printf("Connected to Replica: %v", i+1)
-		rmClient := pb.NewAuctionClient(conn)
+		rmClient := pb.NewExamClient(conn)
 
 		Replicas = append(Replicas, Replica{&pb.User{Userid: int32(i + 1)}, port, rmClient})
 	}
@@ -231,13 +216,13 @@ func main() {
 		id:           id,
 		Replicas:     Replicas,
 		timeout:      GetIntEnv("GLOBALTIMEOUT"),
-		frontend:     pb.NewAuctionClient(frontend),
+		frontend:     pb.NewExamClient(frontend),
 	}
 
-	// Initialize with a starting bid
-	server.auction = Auction{amount: 50, bidderID: 0}
+	// Initialize with a starting value
+	server.incval = &pb.Incval{Amount: -1}
 
-	pb.RegisterAuctionServer(grpcServer, &server)
+	pb.RegisterExamServer(grpcServer, &server)
 	go func() {
 		for {
 			log.Print("Checking requests \n")
@@ -259,9 +244,9 @@ func main() {
 					log.Printf("Pinging leader: %v", server.Leader.user.Userid)
 					_, err := rm.connection.Ping(context.Background(), &pb.Empty{})
 
-					//If we get a resonse error, we assume that the server has crash failure ¤
+					//If we get a resonse error, we assume that the server has crash failure
 					if err != nil {
-						// start election ¤
+						// start election
 						log.Printf("Leader did not respond, starting comparison")
 						server.CompareLamports()
 					}
